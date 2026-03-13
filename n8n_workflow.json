@@ -1,0 +1,183 @@
+{
+  "name": "AI Sales Intelligence Agent",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "sales-lead",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "webhook-node",
+      "name": "🔗 Lead Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [260, 300],
+      "webhookId": "sales-lead"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Extract lead data from webhook\nconst body = $input.first().json.body || $input.first().json;\n\nreturn [{\n  json: {\n    name:    body.name    || '',\n    company: body.company || '',\n    email:   body.email   || '',\n    message: body.message || '',\n    lead_score:             body.lead_score            || 0,\n    conversion_probability: body.conversion_probability || '',\n    intent:   body.intent   || '',\n    strategy: body.strategy || '',\n    summary:  body.summary  || '',\n    reply:    body.reply    || '',\n    status:   'New',\n    created_at: new Date().toISOString(),\n  }\n}];"
+      },
+      "id": "parse-lead-node",
+      "name": "📋 Parse Lead Data",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [480, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.openai.com/v1/chat/completions",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "Bearer YOUR_OPENAI_API_KEY"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": []
+        },
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"model\": \"gpt-4o-mini\",\n  \"messages\": [\n    {\n      \"role\": \"system\",\n      \"content\": \"You are an expert B2B sales analyst. Return ONLY valid JSON.\"\n    },\n    {\n      \"role\": \"user\",\n      \"content\": \"Analyze this lead and return JSON with fields: lead_score (0-100), conversion_probability (string), intent (string), strategy (string), summary (string), reply (string).\\n\\nLead:\\nName: {{ $json.name }}\\nCompany: {{ $json.company }}\\nEmail: {{ $json.email }}\\nMessage: {{ $json.message }}\"\n    }\n  ],\n  \"temperature\": 0.3,\n  \"max_tokens\": 800\n}",
+        "options": {}
+      },
+      "id": "openai-node",
+      "name": "🧠 OpenAI Analysis",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [700, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Parse OpenAI response and merge with lead data\nconst lead   = $('📋 Parse Lead Data').first().json;\nconst rawAI  = $input.first().json.choices[0].message.content;\n\nlet ai = {};\ntry {\n  // Strip any markdown fences\n  const clean = rawAI.replace(/```(?:json)?/g, '').replace(/```/g, '').trim();\n  ai = JSON.parse(clean);\n} catch(e) {\n  ai = {\n    lead_score: 50,\n    conversion_probability: 'Medium (50%)',\n    intent: 'Unable to parse AI response',\n    strategy: 'Manual review recommended',\n    summary: rawAI.substring(0, 200),\n    reply: 'Thank you for reaching out! We will be in touch shortly.',\n  };\n}\n\nreturn [{\n  json: {\n    ...lead,\n    lead_score:             ai.lead_score,\n    conversion_probability: ai.conversion_probability,\n    intent:   ai.intent,\n    strategy: ai.strategy,\n    summary:  ai.summary,\n    reply:    ai.reply,\n  }\n}];"
+      },
+      "id": "parse-ai-node",
+      "name": "🔍 Parse AI Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [920, 300]
+    },
+    {
+      "parameters": {
+        "operation": "appendOrUpdate",
+        "documentId": {
+          "__rl": true,
+          "value": "YOUR_GOOGLE_SHEET_ID",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "leads",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "name":                  "={{ $json.name }}",
+            "company":               "={{ $json.company }}",
+            "email":                 "={{ $json.email }}",
+            "message":               "={{ $json.message }}",
+            "lead_score":            "={{ $json.lead_score }}",
+            "conversion_probability":"={{ $json.conversion_probability }}",
+            "intent":                "={{ $json.intent }}",
+            "strategy":              "={{ $json.strategy }}",
+            "summary":               "={{ $json.summary }}",
+            "status":                "={{ $json.status }}",
+            "created_at":            "={{ $json.created_at }}"
+          }
+        },
+        "options": {}
+      },
+      "id": "gsheets-node",
+      "name": "📊 Save to Google Sheets",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4,
+      "position": [1140, 200]
+    },
+    {
+      "parameters": {
+        "chatId": "YOUR_TELEGRAM_CHAT_ID",
+        "text": "=🚨 *New Lead Alert!*\n\n👤 *Name:* {{ $json.name }}\n🏢 *Company:* {{ $json.company }}\n📧 *Email:* {{ $json.email }}\n\n📊 *AI Score:* {{ $json.lead_score }}/100\n🎯 *Conversion:* {{ $json.conversion_probability }}\n💡 *Intent:* {{ $json.intent }}\n\n📋 *Strategy:*\n{{ $json.strategy }}\n\n---\n_Sent by AI Sales Intelligence Agent_",
+        "additionalFields": {
+          "parse_mode": "Markdown"
+        }
+      },
+      "id": "telegram-node",
+      "name": "📲 Telegram Notify",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1,
+      "position": [1140, 400],
+      "credentials": {
+        "telegramApi": {
+          "id": "telegram-cred",
+          "name": "Telegram Bot"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "fromEmail": "sales@yourcompany.com",
+        "toEmail": "={{ $json.email }}",
+        "subject": "=Re: Your inquiry from {{ $json.company }}",
+        "emailType": "text",
+        "message": "={{ $json.reply }}\n\n---\nBest regards,\nSales Team | AI Sales Intelligence\n\nP.S. We noticed you're from {{ $json.company }} — we have some relevant case studies to share!",
+        "options": {}
+      },
+      "id": "email-node",
+      "name": "✉️ Auto Reply Email",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2,
+      "position": [1140, 600]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={ \"status\": \"success\", \"lead_score\": {{ $('🔍 Parse AI Response').first().json.lead_score }}, \"message\": \"Lead received and analyzed\" }",
+        "options": {}
+      },
+      "id": "response-node",
+      "name": "✅ Webhook Response",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [1360, 300]
+    }
+  ],
+  "connections": {
+    "🔗 Lead Webhook": {
+      "main": [[{ "node": "📋 Parse Lead Data", "type": "main", "index": 0 }]]
+    },
+    "📋 Parse Lead Data": {
+      "main": [[{ "node": "🧠 OpenAI Analysis", "type": "main", "index": 0 }]]
+    },
+    "🧠 OpenAI Analysis": {
+      "main": [[{ "node": "🔍 Parse AI Response", "type": "main", "index": 0 }]]
+    },
+    "🔍 Parse AI Response": {
+      "main": [[
+        { "node": "📊 Save to Google Sheets", "type": "main", "index": 0 },
+        { "node": "📲 Telegram Notify",       "type": "main", "index": 0 },
+        { "node": "✉️ Auto Reply Email",      "type": "main", "index": 0 },
+        { "node": "✅ Webhook Response",       "type": "main", "index": 0 }
+      ]]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "meta": {
+    "templateCredsSetupCompleted": true
+  },
+  "tags": []
+}
